@@ -1,0 +1,29 @@
+{
+  "name": "alldb-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AllDB self-contained Windows database workbench",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.alldb.workbench",
+    "productName": "AllDB",
+    "asar": true,
+    "files": ["main.cjs", "package.json"],
+    "extraResources": [
+      { "from": "../dist-sidecar/AllDB-Core.exe", "to": "sidecar/AllDB-Core.exe" }
+    ],
+    "directories": { "output": "../dist-windows" },
+    "win": {
+      "target": [{ "target": "portable", "arch": ["x64"] }],
+      "artifactName": "AllDB-Portable-${version}-${arch}.${ext}"
+    }
+  }
+}

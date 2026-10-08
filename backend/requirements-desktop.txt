@@ -1,0 +1,4 @@
+-r requirements.txt
+pywin32>=306,<312
+PyInstaller>=6.10,<7
+

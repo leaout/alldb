@@ -1,0 +1,10 @@
+fastapi==0.124.4
+uvicorn[standard]==0.33.0
+cryptography>=42,<47
+python-multipart>=0.0.18,<1
+pymysql>=1.1,<2
+psycopg[binary]>=3.2,<4
+clickhouse-connect>=0.8,<0.9
+redis>=5,<7
+neo4j>=5,<7
+nebula3-python>=3.8,<4

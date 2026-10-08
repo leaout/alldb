@@ -1,0 +1,2 @@
+"""AllDB web service."""
+

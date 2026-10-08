@@ -1,0 +1,26 @@
+services:
+  alldb:
+    build:
+      context: .
+    image: alldb:local
+    container_name: alldb
+    restart: unless-stopped
+    ports:
+      - "${ALLDB_PORT:-8080}:8000"
+    environment:
+      ALLDB_SECRET: "${ALLDB_SECRET:?请在 .env 中设置 ALLDB_SECRET}"
+      ALLDB_ADMIN_USER: "${ALLDB_ADMIN_USER:-admin}"
+      ALLDB_ADMIN_PASSWORD: "${ALLDB_ADMIN_PASSWORD:?请在 .env 中设置 ALLDB_ADMIN_PASSWORD}"
+      ALLDB_MAX_ROWS: "${ALLDB_MAX_ROWS:-5000}"
+      ALLDB_DATA_DIR: /data
+    volumes:
+      - alldb-data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  alldb-data:
