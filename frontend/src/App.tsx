@@ -13,6 +13,11 @@ const defaults: Record<string, string> = {
 
 type FormValue = { name: string; driver: string; host: string; port: string; database: string; username: string; password: string; readonly: boolean }
 const emptyForm: FormValue = { name: '', driver: 'mysql', host: 'localhost', port: '3306', database: '', username: '', password: '', readonly: false }
+type QueryTab = { id: string; title: string; query: string; result: QueryResult | null; message: string; failed: boolean; resultPanel: 'results' | 'messages' }
+
+function makeQueryTab(number: number, query = 'SELECT 1;'): QueryTab {
+  return { id: `query-${number}`, title: `查询 ${number}`, query, result: null, message: '运行查询后，结果会显示在这里', failed: false, resultPanel: 'results' }
+}
 
 function displayCell(value: unknown) {
   if (value === null) return <span className="null">NULL</span>
@@ -39,8 +44,9 @@ export default function App() {
   const [treeChildren, setTreeChildren] = useState<Record<string, TreeNode[]>>({})
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set())
   const [loadingNodes, setLoadingNodes] = useState<Set<string>>(new Set())
-  const [query, setQuery] = useState('SELECT 1;')
-  const [result, setResult] = useState<QueryResult | null>(null)
+  const [queryTabs, setQueryTabs] = useState<QueryTab[]>([makeQueryTab(1)])
+  const [activeQueryId, setActiveQueryId] = useState('query-1')
+  const [nextQueryNumber, setNextQueryNumber] = useState(2)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('就绪')
   const [search, setSearch] = useState('')
@@ -58,8 +64,38 @@ export default function App() {
   const importInput = useRef<HTMLInputElement>(null)
 
   const active = connections.find(item => item.id === activeId)
+  const activeQuery = queryTabs.find(item => item.id === activeQueryId) || queryTabs[0]
+  const query = activeQuery?.query || ''
+  const result = activeQuery?.result || null
   const language = active?.driver === 'neo4j' ? 'cypher' : active?.driver === 'redis' ? 'shell' : 'sql'
   const allTreeNodes = useMemo(() => [...treeRoots, ...Object.values(treeChildren).flat()], [treeRoots, treeChildren])
+
+  function updateQueryTab(id: string, update: Partial<QueryTab>) {
+    setQueryTabs(current => current.map(tab => tab.id === id ? { ...tab, ...update } : tab))
+  }
+
+  function openQueryTab() {
+    const number = nextQueryNumber
+    setNextQueryNumber(number + 1)
+    setQueryTabs(current => [...current, makeQueryTab(number, active ? defaults[active.driver] || 'SELECT 1;' : 'SELECT 1;')])
+    setActiveQueryId(`query-${number}`)
+    setView('query')
+  }
+
+  function closeQueryTab(id: string) {
+    if (queryTabs.length === 1) {
+      const number = nextQueryNumber
+      setNextQueryNumber(number + 1)
+      setQueryTabs([makeQueryTab(number, active ? defaults[active.driver] || 'SELECT 1;' : 'SELECT 1;')])
+      setActiveQueryId(`query-${number}`)
+      setView('query')
+      return
+    }
+    const index = queryTabs.findIndex(tab => tab.id === id)
+    const remaining = queryTabs.filter(tab => tab.id !== id)
+    setQueryTabs(remaining)
+    if (activeQueryId === id) setActiveQueryId(remaining[Math.max(0, index - 1)].id)
+  }
 
   async function loadConnections() {
     const values = await api.connections()
@@ -71,7 +107,7 @@ export default function App() {
   useEffect(() => {
     if (!activeId) { setObjects([]); setOverview(null); return }
     const connection = connections.find(c => c.id === activeId)
-    if (connection) setQuery(defaults[connection.driver] || 'SELECT 1;')
+    if (connection && activeQuery) updateQueryTab(activeQuery.id, { query: defaults[connection.driver] || 'SELECT 1;', result: null, message: '运行查询后，结果会显示在这里', failed: false, resultPanel: 'results' })
     setDetails(null); setView('overview')
     refreshObjects(); loadOverview()
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -125,16 +161,25 @@ export default function App() {
 
   function queryObject(item: DbObject | TreeNode) {
     const scope = item.schema || ('database' in item ? item.database : '')
-    setQuery(`SELECT * FROM ${scope ? `${scope}.` : ''}${item.name} LIMIT 100;`)
+    if (activeQuery) updateQueryTab(activeQuery.id, { query: `SELECT * FROM ${scope ? `${scope}.` : ''}${item.name} LIMIT 100;`, result: null, message: '运行查询后，结果会显示在这里', failed: false, resultPanel: 'results' })
     setView('query')
   }
 
   async function execute() {
-    if (!activeId || !query.trim()) return
+    if (!activeId || !activeQuery || !query.trim()) return
+    const queryId = activeQuery.id
     setBusy(true); setNotice('正在执行…')
-    try { const value = await api.query(activeId, query); setResult(value); setNotice(`完成 · ${value.elapsed_ms} ms · ${value.row_count} 行`) }
-    catch (e) { setNotice((e as Error).message) }
-    finally { setBusy(false) }
+    updateQueryTab(queryId, { message: '正在执行…', failed: false, resultPanel: 'messages' })
+    try {
+      const value = await api.query(activeId, query)
+      const message = value.message || `执行成功 · ${value.elapsed_ms} ms · ${value.row_count} 行`
+      updateQueryTab(queryId, { result: value, message, failed: false, resultPanel: 'results' })
+      setNotice(`完成 · ${value.elapsed_ms} ms · ${value.row_count} 行`)
+    } catch (e) {
+      const message = (e as Error).message || 'SQL 执行失败，数据库没有返回错误详情。'
+      updateQueryTab(queryId, { result: null, message, failed: true, resultPanel: 'messages' })
+      setNotice(message)
+    } finally { setBusy(false) }
   }
 
   async function saveConnection(event: React.FormEvent) {
@@ -257,13 +302,17 @@ export default function App() {
     <main>
       <div className="tabbar">
         {active && <button className={`tab ${view === 'overview' ? 'active' : ''}`} onClick={() => setView('overview')}><Info size={13}/>连接概览</button>}
-        <button className={`tab ${view === 'query' ? 'active' : ''}`} onClick={() => setView('query')}><span className="status-dot"></span>查询 1</button>
+        {queryTabs.map(tab => <div className="query-tab" key={tab.id}>
+          <button className={`tab ${view === 'query' && activeQueryId === tab.id ? 'active' : ''}`} onClick={() => { setActiveQueryId(tab.id); setView('query') }}><span className={`status-dot ${tab.failed ? 'failed' : ''}`}></span>{tab.title}</button>
+          <button className="tab-close" title={`关闭 ${tab.title}`} onClick={() => closeQueryTab(tab.id)}><X size={12}/></button>
+        </div>)}
+        <button className="icon-button new-query-tab" title="新建查询 Tab" onClick={openQueryTab}><Plus size={16}/></button>
         {details && <button className={`tab ${view === 'details' ? 'active' : ''}`} onClick={() => setView('details')}><Table2 size={13}/>{details.name}</button>}
       </div>
       {view === 'query' && <>
         <div className="query-toolbar"><button className="run-button" disabled={!active || busy} onClick={execute}><Play size={15} fill="currentColor"/>{busy ? '执行中' : '运行'}</button><span className="connection-context">{active ? `${active.name} / ${active.database || 'default'}` : '请选择连接'}</span><div className="spacer"/><input ref={importInput} className="hidden-input" type="file" accept=".csv,.json,text/csv,application/json" onChange={e => importData(e.target.files?.[0])}/><button className="tool-button" disabled={!active || active.readonly || busy} onClick={() => importInput.current?.click()}><Upload size={15}/>导入</button><button className="tool-button" disabled={!result} onClick={() => exportData('csv')}><Download size={15}/>CSV</button><button className="tool-button" disabled={!result} onClick={() => exportData('json')}><Download size={15}/>JSON</button></div>
-        <section className="editor-wrap"><Editor height="100%" theme="vs-dark" language={language} value={query} onChange={value => setQuery(value || '')} options={{ minimap: { enabled: false }, fontSize: 14, lineHeight: 23, fontFamily: "'JetBrains Mono', Consolas, monospace", padding: { top: 16 }, scrollBeyondLastLine: false, automaticLayout: true }}/></section>
-        <section className="results"><div className="result-tabs"><span className="active">结果</span><span>消息</span><div className="spacer"/>{result && <small>{result.row_count} 行 · {result.elapsed_ms} ms{result.truncated ? ' · 已截断' : ''}</small>}</div><div className="table-wrap">{!result ? <div className="empty-result"><Database size={34}/><span>运行查询后，结果会显示在这里</span></div> : result.columns.length ? <table><thead><tr><th className="row-number">#</th>{result.columns.map(column => <th key={column}>{column}</th>)}</tr></thead><tbody>{result.rows.map((row, rowIndex) => <tr key={rowIndex}><td className="row-number">{rowIndex + 1}</td>{row.map((cell, cellIndex) => <td key={cellIndex}>{displayCell(cell)}</td>)}</tr>)}</tbody></table> : <div className="empty-result"><span>{result.message || '执行完成'}</span></div>}</div></section>
+        <section className="editor-wrap"><Editor height="100%" theme="vs-dark" language={language} value={query} onChange={value => activeQuery && updateQueryTab(activeQuery.id, { query: value || '' })} options={{ minimap: { enabled: false }, fontSize: 14, lineHeight: 23, fontFamily: "'JetBrains Mono', Consolas, monospace", padding: { top: 16 }, scrollBeyondLastLine: false, automaticLayout: true }}/></section>
+        <section className="results"><div className="result-tabs"><button className={activeQuery?.resultPanel === 'results' ? 'active' : ''} onClick={() => activeQuery && updateQueryTab(activeQuery.id, { resultPanel: 'results' })}>结果</button><button className={`${activeQuery?.resultPanel === 'messages' ? 'active' : ''} ${activeQuery?.failed ? 'message-error' : ''}`} onClick={() => activeQuery && updateQueryTab(activeQuery.id, { resultPanel: 'messages' })}>消息{activeQuery?.failed ? ' · 失败' : ''}</button><div className="spacer"/>{result && activeQuery?.resultPanel === 'results' && <small>{result.row_count} 行 · {result.elapsed_ms} ms{result.truncated ? ' · 已截断' : ''}</small>}</div>{activeQuery?.resultPanel === 'messages' ? <div className={`query-message ${activeQuery.failed ? 'failed' : ''}`}>{activeQuery.message}</div> : <div className="table-wrap">{!result ? <div className="empty-result"><Database size={34}/><span>运行查询后，结果会显示在这里</span></div> : result.columns.length ? <table><thead><tr><th className="row-number">#</th>{result.columns.map(column => <th key={column}>{column}</th>)}</tr></thead><tbody>{result.rows.map((row, rowIndex) => <tr key={rowIndex}><td className="row-number">{rowIndex + 1}</td>{row.map((cell, cellIndex) => <td key={cellIndex}>{displayCell(cell)}</td>)}</tr>)}</tbody></table> : <div className="empty-result"><span>{result.message || '执行完成'}</span></div>}</div>}</section>
       </>}
       {view === 'overview' && <section className="metadata-page">
         {!active ? <div className="empty-result"><Server size={40}/><span>从左侧选择或新建一个数据库连接</span></div> : <>
